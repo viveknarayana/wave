@@ -50,17 +50,19 @@
 ### [ ] KV pressure metrics
 - [ ] Per-worker: `active_conversations * avg_context_length`
 - [ ] Reject routing to saturated workers (>80% KV capacity)
+ - [ ] Implement KV eviction policy (evict oldest/lowest-priority conversations when >80% capacity)
+ - [ ] Compare naive vs KV-aware eviction on max context length and p95 latency
 
-## Phase 6: Speculative Decoding (Week 4-5) ⭐
-### [ ] Drafter model setup
-- [ ] Tiny model (Phi-2 1.5B or DistilGPT2) for draft tokens
-- [ ] Generate 4-8 speculative tokens per request
+## Phase 6: Semantic Prompt Caching (Week 4-5) ⭐
+### [ ] Exact prompt caching
+- [ ] Normalized prompt + model as cache key (`hash(model, prompt)`)
+- [ ] Redis-backed cache with TTL (e.g. 1hr) for full responses
+- [ ] Measure hit rate, p95 latency, and cost reduction at 1, 10, 50 concurrent users
 
-### [ ] Verification pipeline
-- [ ] Gateway: `drafter → speculative_tokens → main_model`
-- [ ] Main model accepts/rejects prefix in single forward pass
-- [ ] Measure speedup on CPU vLLM: tokens/sec before/after (same prompt, same output length)
-- [ ] Record latency + tokens/sec for baseline vs speculative at 1, 10, 50 concurrent users
+### [ ] Semantic prompt caching
+- [ ] Embed prompts and store vectors in Redis (vector index)
+- [ ] Define similarity threshold (e.g. ≥0.9) for cache hits
+- [ ] Compare exact vs semantic caching on latency and qualitative answer quality
 
 ## Phase 7: SLO-Driven Autoscaling (Week 5)
 ### [ ] SLO definitions
@@ -95,7 +97,7 @@ tenants:
 ### [ ] Load testing
 - [ ] `locust` script: 100 concurrent chat streams
 - [ ] Measure: p95 latency, tokens/sec, cost/minute
-- [ ] Before/after speculative decoding speedup
+- [ ] Before/after prompt caching impact (hit rate, latency, cost)
 
 ### [ ] Documentation
 - [ ] `README`: architecture diagram, benchmarks, deploy instructions
@@ -104,8 +106,8 @@ tenants:
 
 ### [ ] Resume bullets (ready to copy-paste)
 ```text
-- Engineered Kubernetes-native LLM inference gateway with continuous batching, speculative decoding (2.1x speedup),
-  and SLO-driven autoscaling across multi-tenant workloads
+- Engineered Kubernetes-native LLM inference gateway with continuous batching, multi-layer prompt caching
+  (exact + semantic, up to 90% cost reduction), and SLO-driven autoscaling across multi-tenant workloads
 - Implemented KV-cache-aware routing preserving conversation locality and paged eviction policies supporting 4x
   longer contexts without OOM
 - Designed cost-aware admission control enforcing per-tenant budgets and model tier limits, integrated with
