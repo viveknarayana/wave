@@ -27,9 +27,9 @@ from gateway.models import (
     WaveUsage,
 )
 from gateway.session_store import get_worker_for_conversation, set_worker_for_conversation
+from gateway.worker_client import get_worker_url, call_worker
 
 
-# Placeholder until Phase 2: single logical worker
 DEFAULT_WORKER_ID = "worker-1"
 
 
@@ -83,15 +83,64 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
         if not worker_id:
             worker_id = DEFAULT_WORKER_ID
             set_worker_for_conversation(body.conversation_id, worker_id)
+    if not worker_id:
+        worker_id = DEFAULT_WORKER_ID
 
-    # Phase 1 stub: no real worker call yet; return a placeholder response
-    # Phase 2: proxy to worker_id's /generate
+    worker_url = get_worker_url(worker_id)
+    if worker_url:
+        try:
+            worker_body = {
+                "model": body.model,
+                "messages": [{"role": m.role, "content": m.content} for m in body.messages],
+                "stream": False,
+                "max_tokens": body.max_tokens,
+                "temperature": body.temperature,
+            }
+            raw = await call_worker(worker_url, worker_body)
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            choices = raw.get("choices", [])
+            usage_raw = raw.get("usage") or {}
+            tokens_in = int(usage_raw.get("prompt_tokens", 0))
+            tokens_out = int(usage_raw.get("completion_tokens", 0))
+            msg = choices[0].get("message", {}) if choices else {}
+            response = ChatCompletionResponse(
+                id=raw.get("id", f"chatcmpl-{uuid.uuid4().hex[:24]}"),
+                model=raw.get("model", body.model),
+                choices=[
+                    ChatChoice(
+                        message=ChatChoiceMessage(
+                            role=msg.get("role", "assistant"),
+                            content=msg.get("content", ""),
+                        ),
+                        finish_reason=choices[0].get("finish_reason", "stop") if choices else "stop",
+                    )
+                ],
+                usage=Usage(
+                    prompt_tokens=tokens_in,
+                    completion_tokens=tokens_out,
+                    total_tokens=tokens_in + tokens_out,
+                ),
+                wave=WaveUsage(
+                    latency_ms=latency_ms,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    model_version=raw.get("model", body.model),
+                    cost_estimate=(tokens_in + tokens_out) * 0.000_001,
+                ),
+            )
+            REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+            REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+            return response
+        except Exception:
+            ERROR_COUNT.labels(path=path, reason="worker_error").inc()
+            # Fall through to stub
+
+    # No worker configured or worker failed: stub response
     latency_ms = int((time.perf_counter() - start) * 1000)
-    tokens_in = sum(len(m.content) // 4 for m in body.messages)  # rough
-    tokens_out = 10  # stub
+    tokens_in = sum(len(m.content) // 4 for m in body.messages)
+    tokens_out = 10
     model_version = f"{body.model}-v1"
-    cost_estimate = (tokens_in + tokens_out) * 0.000_001  # placeholder USD
-
+    cost_estimate = (tokens_in + tokens_out) * 0.000_001
     response = ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
         model=body.model,
@@ -99,7 +148,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
             ChatChoice(
                 message=ChatChoiceMessage(
                     role="assistant",
-                    content="[Wave Phase 1 stub: no worker connected yet.]",
+                    content="[Wave stub: no worker configured or worker error. Set WORKER_BASE_URL.]",
                 ),
                 finish_reason="stop",
             )
