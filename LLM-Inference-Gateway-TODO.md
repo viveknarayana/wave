@@ -2,15 +2,17 @@
 **"Production-grade Kubernetes-native LLM serving platform with speculative decoding, continuous batching, and SLO-driven scaling"**
 
 ## Phase 1: Core Gateway (Week 1)
-### [ ] Design API spec
-- [ ] `/v1/chat/completions` (OpenAI compatible)
-- [ ] Request schema: `model`, `messages`, `tenant_id`, `conversation_id`, `priority`
-- [ ] Response schema: `latency_ms`, `tokens_in`, `tokens_out`, `model_version`, `cost_estimate`
+### [x] Design API spec
+- [x] `/v1/chat/completions` (OpenAI compatible)
+- [x] Request schema: `model`, `messages`, `tenant_id`, `conversation_id`, `priority`
+- [x] Response schema: `latency_ms`, `tokens_in`, `tokens_out`, `model_version`, `cost_estimate` (in `wave` object)
 
-### [ ] Build gateway service (FastAPI/Flask)
-- [ ] Request validation + tenant config lookup
-- [ ] Simple Redis-backed session store (`conversation_id -> worker_id`)
-- [ ] Basic metrics (Prometheus client): QPS, latency histograms, error rates
+### [x] Build gateway service (FastAPI/Flask)
+- [x] Request validation + tenant config lookup
+- [x] Simple Redis-backed session store (`conversation_id -> worker_id`)
+- [x] Basic metrics (Prometheus client): QPS, latency histograms, error rates
+
+**Run:** `pip install -r requirements.txt && uvicorn gateway.main:app --reload --port 8080` (optional: `REDIS_URL=redis://localhost:6379/0`)
 
 ## Phase 2: Model Workers (Week 2)
 ### [ ] Backend worker service
