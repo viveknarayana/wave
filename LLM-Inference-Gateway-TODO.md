@@ -15,14 +15,26 @@
 **Run:** `pip install -r requirements.txt && uvicorn gateway.main:app --reload --port 8080` (optional: `REDIS_URL=redis://localhost:6379/0`)
 
 ## Phase 2: Model Workers (Week 2)
-### [ ] Backend worker service
+### [x] Gateway → worker proxy
+- [x] Gateway calls worker's `/v1/chat/completions` (OpenAI-compatible); `WORKER_BASE_URL` or `WORKER_1_URL` env
 - [ ] vLLM (CPU-only on M2) or HuggingFace TGI container (start with 3B/7B model)
 - [ ] Health endpoint + capacity metrics (active_requests, tokens_in_flight)
-- [ ] gRPC/HTTP endpoint for `/generate` with streaming support
+- [ ] Streaming support (gateway streams from worker)
 
 ### [ ] Docker images
 - [ ] `llm-worker:latest` (model + vLLM)
 - [ ] `gateway:latest` (FastAPI service)
+
+**Run (local, two terminals):**
+```bash
+# Terminal 1: vLLM worker (CPU on M2). Install vLLM first; then:
+vllm serve microsoft/Phi-3-mini-4k-instruct --device cpu --port 8000
+
+# Terminal 2: Gateway (from repo root)
+pip install -r requirements.txt
+WORKER_BASE_URL=http://localhost:8000 uvicorn gateway.main:app --reload --port 8080
+```
+Then: `curl -X POST http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"Phi-3-mini-4k-instruct","messages":[{"role":"user","content":"Hi"}]}'`
 
 ## Phase 3: Kubernetes Foundation (Week 2-3)
 ### [ ] K8s manifests
