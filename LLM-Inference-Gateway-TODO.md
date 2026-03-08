@@ -17,24 +17,24 @@
 ## Phase 2: Model Workers (Week 2)
 ### [x] Gateway → worker proxy
 - [x] Gateway calls worker's `/v1/chat/completions` (OpenAI-compatible); `WORKER_BASE_URL` or `WORKER_1_URL` env
-- [ ] vLLM (CPU-only on M2) or HuggingFace TGI container (start with 3B/7B model)
-- [ ] Health endpoint + capacity metrics (active_requests, tokens_in_flight)
-- [ ] Streaming support (gateway streams from worker)
+- [x] vLLM (CPU on M2, Python 3.12 + build from source) or TGI
+- [x] Health: worker `/health`; gateway `GET /worker/health`; vLLM has `/metrics` for capacity
+- [x] Streaming support: `stream: true` → gateway streams SSE from worker
 
-### [ ] Docker images
-- [ ] `llm-worker:latest` (model + vLLM)
-- [ ] `gateway:latest` (FastAPI service)
+### [x] Docker images
+- [x] `Dockerfile.worker` (vLLM; env `MODEL_ID`, `PORT`)
+- [x] `Dockerfile.gateway` (Wave gateway)
 
 **Run (local, two terminals):**
 ```bash
 # Terminal 1: vLLM worker (CPU on M2). Install vLLM first; then:
-vllm serve microsoft/Phi-3-mini-4k-instruct --device cpu --port 8000
+vllm serve Qwen/Qwen2-0.5B-Instruct --dtype=bfloat16 --port 8000
 
 # Terminal 2: Gateway (from repo root)
 pip install -r requirements.txt
 WORKER_BASE_URL=http://localhost:8000 uvicorn gateway.main:app --reload --port 8080
 ```
-Then: `curl -X POST http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"Phi-3-mini-4k-instruct","messages":[{"role":"user","content":"Hi"}]}'`
+Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"premium","messages":[...]}'`. Stream: add `"stream":true`. Worker health: `curl http://localhost:8080/worker/health`
 
 ## Phase 3: Kubernetes Foundation (Week 2-3)
 ### [ ] K8s manifests

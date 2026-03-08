@@ -1,0 +1,15 @@
+# vLLM worker (CPU or GPU). Set MODEL_ID and optionally PORT via env.
+# Build: docker build -f Dockerfile.worker -t llm-worker:latest .
+# Run:   docker run -p 8000:8000 -e MODEL_ID=Qwen/Qwen2-0.5B-Instruct llm-worker:latest
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install vLLM (CPU; for GPU use official vllm/vllm image instead)
+RUN pip install --no-cache-dir vllm
+
+ENV MODEL_ID=Qwen/Qwen2-0.5B-Instruct
+ENV PORT=8000
+EXPOSE 8000
+
+CMD ["sh", "-c", "vllm serve $MODEL_ID --port $PORT --host 0.0.0.0"]
