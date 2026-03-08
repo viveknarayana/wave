@@ -41,3 +41,31 @@ async def call_worker(
         resp = await client.post(url, json=body)
         resp.raise_for_status()
         return resp.json()
+
+
+async def stream_worker(
+    base_url: str,
+    body: Dict[str, Any],
+    timeout: float = 60.0,
+):
+    """
+    POST to worker with stream=True; yields SSE bytes (chunked).
+    """
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, json=body) as resp:
+            resp.raise_for_status()
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+
+
+async def get_worker_health(base_url: str, timeout: float = 5.0) -> Dict[str, Any]:
+    """
+    GET worker's /health. Returns {"status": "ok", "worker": base_url} or raises.
+    """
+    url = f"{base_url.rstrip('/')}/health"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        return {"worker": base_url, **data}

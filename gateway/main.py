@@ -8,7 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, Response
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from gateway.config import get_tenant_config
 from gateway.metrics import (
@@ -27,7 +27,7 @@ from gateway.models import (
     WaveUsage,
 )
 from gateway.session_store import get_worker_for_conversation, set_worker_for_conversation
-from gateway.worker_client import get_worker_url, call_worker
+from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
 
 
 DEFAULT_WORKER_ID = "worker-1"
@@ -92,10 +92,17 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
             worker_body = {
                 "model": body.model,
                 "messages": [{"role": m.role, "content": m.content} for m in body.messages],
-                "stream": False,
+                "stream": body.stream,
                 "max_tokens": body.max_tokens,
                 "temperature": body.temperature,
             }
+            if body.stream:
+                REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+                REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+                return StreamingResponse(
+                    stream_worker(worker_url, worker_body),
+                    media_type="text/event-stream",
+                )
             raw = await call_worker(worker_url, worker_body)
             latency_ms = int((time.perf_counter() - start) * 1000)
             choices = raw.get("choices", [])
@@ -180,6 +187,19 @@ async def metrics() -> Response:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/worker/health")
+async def worker_health() -> dict:
+    """Probe configured worker's /health. Returns worker status or 503 if no worker/unhealthy."""
+    worker_url = get_worker_url(DEFAULT_WORKER_ID)
+    if not worker_url:
+        return {"status": "no_worker", "worker": None}
+    try:
+        data = await get_worker_health(worker_url)
+        return {"status": "ok", **data}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Worker unreachable: {e!s}")
 
 
 @app.exception_handler(Exception)
