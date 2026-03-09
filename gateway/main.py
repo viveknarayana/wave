@@ -3,6 +3,7 @@ Wave gateway: OpenAI-compatible /v1/chat/completions with tenant config,
 Redis session store (conversation_id -> worker_id), and Prometheus metrics.
 """
 
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -28,15 +29,27 @@ from gateway.models import (
 )
 from gateway.session_store import get_worker_for_conversation, set_worker_for_conversation
 from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
+from gateway.batching import PriorityBatcher, BatchRequest
 
 
 DEFAULT_WORKER_ID = "worker-1"
+ENABLE_PRIORITY_BATCHING = os.environ.get("ENABLE_PRIORITY_BATCHING", "1") == "1"
+
+batcher: PriorityBatcher | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: optional Redis ping; shutdown: nothing for now
-    yield
+    global batcher  # noqa: PLW0603
+
+    if ENABLE_PRIORITY_BATCHING:
+        batcher = PriorityBatcher(call_worker)
+        await batcher.start()
+    try:
+        yield
+    finally:
+        if batcher is not None:
+            await batcher.stop()
 
 
 app = FastAPI(title="Wave Gateway", version="0.1.0", lifespan=lifespan)
@@ -103,7 +116,21 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                     stream_worker(worker_url, worker_body),
                     media_type="text/event-stream",
                 )
-            raw = await call_worker(worker_url, worker_body)
+
+            # Non-streaming: optionally go through priority-aware batcher.
+            if ENABLE_PRIORITY_BATCHING and batcher is not None:
+                # Treat premium tenant as high priority; others as free/standard.
+                tenant_id = body.tenant_id or "free"
+                priority = "premium" if tenant_id == "premium" else "free"
+                raw = await batcher.enqueue(
+                    BatchRequest(
+                        worker_url=worker_url,
+                        body=worker_body,
+                        priority=priority,
+                    )
+                )
+            else:
+                raw = await call_worker(worker_url, worker_body)
             latency_ms = int((time.perf_counter() - start) * 1000)
             choices = raw.get("choices", [])
             usage_raw = raw.get("usage") or {}
