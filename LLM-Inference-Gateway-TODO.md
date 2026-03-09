@@ -37,16 +37,17 @@ WORKER_BASE_URL=http://localhost:8000 uvicorn gateway.main:app --reload --port 8
 Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"premium","messages":[...]}'`. Stream: add `"stream":true`. Worker health: `curl http://localhost:8080/worker/health`
 
 ## Phase 3: Kubernetes Foundation (Week 2-3)
-### [ ] K8s manifests
-- [ ] `gateway-deployment.yaml` (3 replicas)
-- [ ] `worker-deployment.yaml` (1-4 replicas, GPU node selector)
-- [ ] `redis-statefulset.yaml`
-- [ ] `gateway-service.yaml` + port-forward for local testing
+### [x] K8s manifests
+- [x] `k8s/namespace.yaml`
+- [x] `k8s/gateway-deployment.yaml` (3 replicas) + Service (NodePort 30080)
+- [x] `k8s/worker-deployment.yaml` (1 replica; optional GPU nodeSelector in comments)
+- [x] `k8s/redis-statefulset.yaml` + headless Service
+- [x] `k8s/README.md` — apply order, build/load images, test commands
 
 ### [ ] Local cluster
-- [ ] `kind` or `k3d` cluster with NVIDIA device plugin
-- [ ] Deploy all services locally
-- [ ] Test end-to-end: `curl /v1/chat/completions`
+- [ ] Create kind/k3d cluster, build & load `gateway:latest` and `llm-worker:latest`
+- [ ] `kubectl apply -f k8s/` then wait for pods; `kubectl port-forward svc/gateway 8080:8080`
+- [ ] Test end-to-end: `curl localhost:8080/v1/chat/completions ...`
 
 ## Phase 4: Continuous Batching (Week 3)
 ### [ ] Gateway batching engine
