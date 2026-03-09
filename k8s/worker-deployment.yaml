@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: wave
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: vllm
+          image: llm-worker:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODEL_ID
+              value: "Qwen/Qwen2-0.5B-Instruct"
+            - name: PORT
+              value: "8000"
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      # For GPU nodes (optional): uncomment and add nodeSelector / tolerations
+      # nodeSelector:
+      #   nvidia.com/gpu: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: wave
+  labels:
+    app: worker
+spec:
+  selector:
+    app: worker
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
