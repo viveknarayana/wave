@@ -30,12 +30,14 @@ from gateway.models import (
 from gateway.session_store import get_worker_for_conversation, set_worker_for_conversation
 from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
 from gateway.batching import PriorityBatcher, BatchRequest
+from gateway.kv_routing import default_kv_router
 
 
 DEFAULT_WORKER_ID = "worker-1"
 ENABLE_PRIORITY_BATCHING = os.environ.get("ENABLE_PRIORITY_BATCHING", "1") == "1"
 
 batcher: PriorityBatcher | None = None
+kv_router = default_kv_router()
 
 
 @asynccontextmanager
@@ -89,15 +91,25 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
         ERROR_COUNT.labels(path=path, reason="validation").inc()
         raise
 
-    # Affinity: lookup or assign worker for this conversation
+    # Approximate context length (tokens) for KV pressure proxy.
+    approx_tokens = sum(len(m.content) // 4 for m in body.messages)
+
+    # Affinity + KV-aware routing:
+    # - Existing conversation_id -> stick to its worker (affinity).
+    # - New conversation -> choose worker with lowest KV pressure.
     worker_id = None
+    is_new_conversation = False
     if body.conversation_id:
         worker_id = get_worker_for_conversation(body.conversation_id)
         if not worker_id:
-            worker_id = DEFAULT_WORKER_ID
+            worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
             set_worker_for_conversation(body.conversation_id, worker_id)
+            is_new_conversation = True
     if not worker_id:
-        worker_id = DEFAULT_WORKER_ID
+        # No conversation_id: treat this as a short one-off; use KV router anyway.
+        worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
+
+    kv_router.record_conversation(worker_id, approx_tokens, is_new_conversation)
 
     worker_url = get_worker_url(worker_id)
     if worker_url:
