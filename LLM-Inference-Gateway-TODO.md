@@ -50,21 +50,20 @@ Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"pre
 - [ ] Test end-to-end: `curl localhost:8080/v1/chat/completions ...`
 
 ## Phase 4: Continuous Batching (Week 3)
-### [ ] Gateway batching engine
-- [ ] Queue incoming requests by model name
-- [ ] Batch formation: max 4096 tokens OR 10ms timeout
-- [ ] Fan-out to workers with batched payload
-- [ ] De-batch responses back to individual streams
+### [x] Gateway batching engine (priority-aware)
+- [x] In-gateway priority batcher (premium vs free) for non-streaming requests
+- [x] Small wait window (~10ms) and max batch size to group requests by model
+- [x] Premium requests dispatched before free; actual kernel-level batching remains in vLLM
 
 ## Phase 5: KV-Aware Routing (Week 4)
-### [ ] Affinity routing
-- [ ] `conversation_id -> worker_id` mapping (Redis TTL 1hr)
-- [ ] Load-aware worker selection (least active_requests)
-- [ ] Fallback: rebuild context on worker failure
+### [x] Affinity routing
+- [x] `conversation_id -> worker_id` mapping (Redis TTL 1hr) via session store
+- [x] Load-aware worker selection (least KV pressure) for new conversations
+- [x] Fallback: if no mapping, choose worker from KV-aware router (defaults to `worker-1` when single worker)
 
-### [ ] KV pressure metrics
-- [ ] Per-worker: `active_conversations * avg_context_length`
-- [ ] Reject routing to saturated workers (>80% KV capacity)
+### [x] KV pressure metrics (proxy)
+- [x] Per-worker proxy: `active_conversations * avg_context_tokens` tracked in-process
+- [ ] Reject routing to saturated workers (>80% KV capacity) — TODO: tie into admission control
  - [ ] Implement KV eviction policy (evict oldest/lowest-priority conversations when >80% capacity)
  - [ ] Compare naive vs KV-aware eviction on max context length and p95 latency
 
