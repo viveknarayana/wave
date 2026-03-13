@@ -63,8 +63,8 @@ Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"pre
 
 ### [x] KV pressure metrics (proxy)
 - [x] Per-worker proxy: `active_conversations * avg_context_tokens` tracked in-process
-- [ ] Reject routing to saturated workers (>80% KV capacity) — TODO: tie into admission control
- - [ ] Implement KV eviction policy (evict oldest/lowest-priority conversations when >80% capacity)
+- [x] Reject routing to saturated workers (>80% KV capacity) — TODO: tie into admission control
+ - [x] Implement KV eviction policy (evict oldest/lowest-priority conversations when >80% capacity)
  - [ ] Compare naive vs KV-aware eviction on max context length and p95 latency
 
 ## Phase 6: Semantic Prompt Caching (Week 4-5) ⭐

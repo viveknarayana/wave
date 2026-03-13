@@ -110,7 +110,12 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
         # No conversation_id: treat this as a short one-off; use KV router anyway.
         worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
 
-    kv_router.record_conversation(worker_id, approx_tokens, is_new_conversation)
+    kv_router.record_conversation(
+        worker_id,
+        approx_tokens,
+        is_new_conversation,
+        conversation_id=body.conversation_id,
+    )
 
     worker_url = get_worker_url(worker_id)
     if worker_url:
