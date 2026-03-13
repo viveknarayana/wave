@@ -31,6 +31,7 @@ from gateway.session_store import get_worker_for_conversation, set_worker_for_co
 from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
 from gateway.batching import PriorityBatcher, BatchRequest
 from gateway.kv_routing import default_kv_router
+from gateway.prompt_cache import get_cached, set_cached
 
 
 DEFAULT_WORKER_ID = "worker-1"
@@ -129,6 +130,45 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                     media_type="text/event-stream",
                 )
 
+            # Non-streaming: try conversation-scoped prompt cache first, then worker.
+            if not body.stream and body.conversation_id:
+                messages_for_cache = [{"role": m.role, "content": m.content} for m in body.messages]
+                cached, cache_hit_type = get_cached(body.conversation_id, body.model, messages_for_cache)
+                if cached is not None and cache_hit_type:
+                    choices = cached.get("choices", [])
+                    usage_raw = cached.get("usage") or {}
+                    msg = choices[0].get("message", {}) if choices else {}
+                    latency_ms = int((time.perf_counter() - start) * 1000)
+                    response = ChatCompletionResponse(
+                        id=cached.get("id", f"chatcmpl-{uuid.uuid4().hex[:24]}"),
+                        model=cached.get("model", body.model),
+                        choices=[
+                            ChatChoice(
+                                message=ChatChoiceMessage(
+                                    role=msg.get("role", "assistant"),
+                                    content=msg.get("content", ""),
+                                ),
+                                finish_reason=choices[0].get("finish_reason", "stop") if choices else "stop",
+                            )
+                        ],
+                        usage=Usage(
+                            prompt_tokens=int(usage_raw.get("prompt_tokens", 0)),
+                            completion_tokens=int(usage_raw.get("completion_tokens", 0)),
+                            total_tokens=int(usage_raw.get("prompt_tokens", 0)) + int(usage_raw.get("completion_tokens", 0)),
+                        ),
+                        wave=WaveUsage(
+                            latency_ms=latency_ms,
+                            tokens_in=int(usage_raw.get("prompt_tokens", 0)),
+                            tokens_out=int(usage_raw.get("completion_tokens", 0)),
+                            model_version=cached.get("model", body.model),
+                            cost_estimate=(int(usage_raw.get("prompt_tokens", 0)) + int(usage_raw.get("completion_tokens", 0))) * 0.000_001,
+                            cache_hit=cache_hit_type,
+                        ),
+                    )
+                    REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+                    REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+                    return response
+
             # Non-streaming: optionally go through priority-aware batcher.
             if ENABLE_PRIORITY_BATCHING and batcher is not None:
                 # Treat premium tenant as high priority; others as free/standard.
@@ -172,8 +212,17 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                     tokens_out=tokens_out,
                     model_version=raw.get("model", body.model),
                     cost_estimate=(tokens_in + tokens_out) * 0.000_001,
+                    cache_hit=None,
                 ),
             )
+            # Store in conversation-scoped prompt cache for future hits.
+            if body.conversation_id:
+                set_cached(
+                    body.conversation_id,
+                    body.model,
+                    [{"role": m.role, "content": m.content} for m in body.messages],
+                    raw,
+                )
             REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
             REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
             return response

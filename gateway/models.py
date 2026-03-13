@@ -33,6 +33,7 @@ class WaveUsage(BaseModel):
     tokens_out: int
     model_version: str
     cost_estimate: float
+    cache_hit: Optional[str] = None  # "exact" | "semantic" when served from prompt cache
 
 
 class ChatChoiceMessage(BaseModel):
