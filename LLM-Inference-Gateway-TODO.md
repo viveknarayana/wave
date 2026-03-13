@@ -68,15 +68,17 @@ Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"pre
  - [ ] Compare naive vs KV-aware eviction on max context length and p95 latency
 
 ## Phase 6: Semantic Prompt Caching (Week 4-5) ⭐
-### [ ] Exact prompt caching
-- [ ] Normalized prompt + model as cache key (`hash(model, prompt)`)
-- [ ] Redis-backed cache with TTL (e.g. 1hr) for full responses
+### [x] Exact prompt caching
+- [x] Conversation-scoped: key = `hash(conversation_id, model, normalized_prompt)` (no cross-conversation reuse)
+- [x] Redis-backed cache with TTL (`PROMPT_CACHE_TTL`, default 1hr); full response stored
 - [ ] Measure hit rate, p95 latency, and cost reduction at 1, 10, 50 concurrent users
 
-### [ ] Semantic prompt caching
-- [ ] Embed prompts and store vectors in Redis (vector index)
-- [ ] Define similarity threshold (e.g. ≥0.9) for cache hits
+### [x] Semantic prompt caching
+- [x] Embeddings via sentence-transformers (`all-MiniLM-L6-v2`); vectors stored per `(conversation_id, model)` in Redis (JSON list)
+- [x] Similarity threshold `SEMANTIC_CACHE_THRESHOLD` (default 0.92); optional context = last N messages (`SEMANTIC_CONTEXT_MESSAGES=2`)
 - [ ] Compare exact vs semantic caching on latency and qualitative answer quality
+
+**Impl:** `gateway/prompt_cache.py` — `get_cached` / `set_cached`; `wave.cache_hit` = `"exact"` | `"semantic"`. Env: `ENABLE_PROMPT_CACHE=1`, `PROMPT_CACHE_TTL`, `SEMANTIC_CACHE_THRESHOLD`, `SEMANTIC_CONTEXT_MESSAGES`, `MAX_SEMANTIC_ENTRIES_PER_CONV`. Semantic is disabled if `sentence-transformers` is not installed.
 
 ## Phase 7: SLO-Driven Autoscaling (Week 5)
 ### [ ] SLO definitions
