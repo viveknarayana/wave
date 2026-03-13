@@ -1,6 +1,6 @@
 # Wave
 
-Production-grade Kubernetes-native LLM inference gateway that sits in front of vLLM and adds production features (routing, caching, tenancy, metrics).
+Experimentation with a Kubernetes-native LLM inference gateway that sits in front of vLLM and adds production features (routing, caching, tenancy, metrics).
 
 See [LLM-Inference-Gateway-TODO.md](./LLM-Inference-Gateway-TODO.md) for the full roadmap.
 
@@ -20,4 +20,3 @@ See [LLM-Inference-Gateway-TODO.md](./LLM-Inference-Gateway-TODO.md) for the ful
   - Exact cache: normalized prompt within `(conversation_id, model)`.
   - Optional semantic cache via embeddings (if `sentence-transformers` is installed).
 
-If you want background definitions (KV cache, continuous batching, etc.), see `explanations.md` (intentionally not tracked in git).
