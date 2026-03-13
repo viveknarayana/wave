@@ -27,7 +27,11 @@ from gateway.models import (
     Usage,
     WaveUsage,
 )
-from gateway.session_store import get_worker_for_conversation, set_worker_for_conversation
+from gateway.session_store import (
+    get_worker_for_conversation,
+    set_worker_for_conversation,
+    clear_worker_for_conversation,
+)
 from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
 from gateway.batching import PriorityBatcher, BatchRequest
 from gateway.kv_routing import default_kv_router
@@ -94,6 +98,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
 
     # Approximate context length (tokens) for KV pressure proxy.
     approx_tokens = sum(len(m.content) // 4 for m in body.messages)
+    tenant_id = body.tenant_id or "free"
 
     # Affinity + KV-aware routing:
     # - Existing conversation_id -> stick to its worker (affinity).
@@ -109,6 +114,42 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
     if not worker_id:
         # No conversation_id: treat this as a short one-off; use KV router anyway.
         worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
+
+    # If this conversation is pinned to a saturated worker, unpin + reroute (cold start).
+    if body.conversation_id and not is_new_conversation and worker_id and kv_router.is_saturated(worker_id):
+        if tenant_id != "premium":
+            kv_router.evict_specific_conversation(worker_id, body.conversation_id)
+            clear_worker_for_conversation(body.conversation_id)
+            worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
+            set_worker_for_conversation(body.conversation_id, worker_id)
+            is_new_conversation = True
+
+    # KV admission control: if all workers are saturated, shed load.
+    if kv_router.all_saturated():
+        # Evict / reject free-tier traffic first: reject free when saturated.
+        if tenant_id != "premium":
+            # Try to free up capacity by evicting one conversation from the chosen worker.
+            evicted = kv_router.evict_one_conversation(worker_id)
+            if evicted:
+                clear_worker_for_conversation(evicted)
+                worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
+            else:
+                REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+                REQUEST_COUNT.labels(method="POST", path=path, status="503").inc()
+                ERROR_COUNT.labels(path=path, reason="kv_saturated").inc()
+                raise HTTPException(
+                    status_code=503,
+                    detail="KV capacity saturated; please retry later or upgrade tier.",
+                )
+        else:
+            # Premium is rejected when the entire fleet is saturated.
+            REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+            REQUEST_COUNT.labels(method="POST", path=path, status="503").inc()
+            ERROR_COUNT.labels(path=path, reason="kv_saturated").inc()
+            raise HTTPException(
+                status_code=503,
+                detail="KV capacity saturated (premium); please retry shortly.",
+            )
 
     kv_router.record_conversation(
         worker_id,

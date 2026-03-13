@@ -118,6 +118,25 @@ class KVAwareRouter:
             stats.active_conversations -= 1
         return evicted
 
+    def evict_specific_conversation(self, worker_id: str, conversation_id: str) -> bool:
+        """
+        Evict a specific conversation from a worker's tracking set (if present).
+        Returns True if it was removed.
+        """
+        if not worker_id or not conversation_id:
+            return False
+        stats = self._stats.get(worker_id)
+        convs = self._worker_conversations.get(worker_id)
+        if not stats or not convs:
+            return False
+        try:
+            convs.remove(conversation_id)
+        except ValueError:
+            return False
+        if stats.active_conversations > 0:
+            stats.active_conversations -= 1
+        return True
+
 
 def default_kv_router() -> KVAwareRouter:
     """
