@@ -39,3 +39,13 @@ def set_worker_for_conversation(conversation_id: str, worker_id: str) -> None:
         )
     except redis.RedisError:
         pass  # non-fatal for Phase 1; metrics can track failures later
+
+
+def clear_worker_for_conversation(conversation_id: str) -> None:
+    """Remove affinity mapping so future requests can be re-routed."""
+    if not conversation_id:
+        return
+    try:
+        _get_client().delete(f"conv:{conversation_id}")
+    except redis.RedisError:
+        pass
