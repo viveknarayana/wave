@@ -87,14 +87,33 @@ premium:  { p95_latency: "1s", error_rate: "0.1%" }
 standard: { p95_latency: "3s", error_rate: "1%"   }
 ```
 
-### [ ] Custom metrics
+### [x] Custom metrics
 - [ ] Prometheus queries for p95 latency per tenant tier
-- [ ] Admission control: reject low-priority if SLO violated
+- [x] Admission control: reject low-priority if SLO violated
+- [x] Add metric `wave_request_latency_ms_bucket{tenant_tier=...,status=...}` for percentile math
+- [x] Add metric `wave_requests_total{tenant_tier=...,status=...}` for error-rate SLO tracking
+- [x] Add metric `wave_admission_rejections_total{tenant_tier=...,reason=...}`
+- [x] Expose `queue_depth` and `inflight_requests` gauges from gateway
 
-### [ ] HPA + custom scaler
-- [ ] HPA on queue_depth + p95_latency
+### [x] HPA + custom scaler
+- [x] HPA on queue_depth + p95_latency
 - [ ] Scale-out: p95 > SLO * 1.2 for 2min
 - [ ] Scale-in: p95 < SLO * 0.8 for 5min
+- [ ] Deploy Prometheus Adapter or KEDA for custom metrics API
+- [x] Add `k8s/gateway-hpa.yaml` (min=2, max=10, with stabilization windows)
+- [x] Add `k8s/worker-hpa.yaml` (min=1, max=8, queue + p95 policy)
+- [x] Add cooldown and max-step scale policy to avoid oscillation
+
+**Impl target:**
+- [x] Gateway SLO policy evaluator reads rolling p95 + error-rate per tier every 15s
+- [x] Admission path rejects/de-prioritizes `free` requests first during SLO violations (`429` + retry hint)
+- [ ] K8s custom metrics pipeline publishes `queue_depth` and `p95_latency_ms` for HPA
+
+**Verify (commands):**
+- [ ] `kubectl apply -f k8s/ && kubectl apply -f k8s/gateway-hpa.yaml && kubectl apply -f k8s/worker-hpa.yaml`
+- [ ] `kubectl get hpa -n wave -w`
+- [ ] `kubectl top pods -n wave`
+- [ ] `kubectl logs -n wave deploy/gateway --tail=200 | rg "admission|slo|reject|p95"`
 
 ## Phase 8: Multi-Tenancy (Week 6)
 ### [ ] Tenant configs

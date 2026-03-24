@@ -41,6 +41,15 @@ class PriorityBatcher:
         self._task: Optional[asyncio.Task] = None
         self._max_batch_size = max_batch_size
         self._max_wait_ms = max_wait_ms
+        self._inflight = 0
+
+    @property
+    def queue_depth(self) -> int:
+        return self._queue.qsize()
+
+    @property
+    def inflight_requests(self) -> int:
+        return self._inflight
 
     async def start(self) -> None:
         self._running = True
@@ -93,12 +102,15 @@ class PriorityBatcher:
         async def handle_one(r: BatchRequest) -> None:
             if r.future.done():
                 return
+            self._inflight += 1
             try:
                 raw = await self._call_worker(r.worker_url, r.body)
                 r.future.set_result(raw)
             except Exception as exc:  # noqa: BLE001
                 if not r.future.done():
                     r.future.set_exception(exc)
+            finally:
+                self._inflight = max(0, self._inflight - 1)
 
         await asyncio.gather(*(handle_one(r) for r in batch), return_exceptions=True)
 

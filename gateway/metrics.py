@@ -1,6 +1,6 @@
-"""Prometheus metrics: QPS, latency histograms, error rates."""
+"""Prometheus metrics: QPS, latency histograms, error rates, and SLO signals."""
 
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 REQUEST_COUNT = Counter(
     "wave_gateway_requests_total",
@@ -17,6 +17,32 @@ ERROR_COUNT = Counter(
     "wave_gateway_errors_total",
     "Total errors (4xx/5xx or validation failures)",
     ["path", "reason"],
+)
+
+# Phase 7 metrics for tiered SLOs and autoscaling.
+REQUESTS_BY_TIER = Counter(
+    "wave_requests_total",
+    "Requests by tenant tier and final status class",
+    ["tenant_tier", "status"],
+)
+REQUEST_LATENCY_MS_BY_TIER = Histogram(
+    "wave_request_latency_ms",
+    "End-to-end request latency in milliseconds by tenant tier",
+    ["tenant_tier", "status"],
+    buckets=(25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000),
+)
+ADMISSION_REJECTIONS = Counter(
+    "wave_admission_rejections_total",
+    "Requests rejected by admission control",
+    ["tenant_tier", "reason"],
+)
+QUEUE_DEPTH = Gauge(
+    "wave_queue_depth",
+    "Current in-memory queue depth in the gateway",
+)
+INFLIGHT_REQUESTS = Gauge(
+    "wave_inflight_requests",
+    "Current in-flight requests in the gateway",
 )
 
 

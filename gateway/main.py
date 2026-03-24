@@ -6,6 +6,7 @@ Redis session store (conversation_id -> worker_id), and Prometheus metrics.
 import os
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, Response
@@ -13,9 +14,14 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from gateway.config import get_tenant_config
 from gateway.metrics import (
+    ADMISSION_REJECTIONS,
+    INFLIGHT_REQUESTS,
     REQUEST_COUNT,
     REQUEST_LATENCY,
+    REQUEST_LATENCY_MS_BY_TIER,
+    REQUESTS_BY_TIER,
     ERROR_COUNT,
+    QUEUE_DEPTH,
     get_metrics_bytes,
     get_metrics_content_type,
 )
@@ -40,9 +46,22 @@ from gateway.prompt_cache import get_cached, set_cached
 
 DEFAULT_WORKER_ID = "worker-1"
 ENABLE_PRIORITY_BATCHING = os.environ.get("ENABLE_PRIORITY_BATCHING", "1") == "1"
+SLO_WINDOW_SECONDS = int(os.environ.get("SLO_WINDOW_SECONDS", "120"))
+SLO_EVAL_INTERVAL_SECONDS = int(os.environ.get("SLO_EVAL_INTERVAL_SECONDS", "15"))
+
+TIER_SLOS = {
+    "premium": {"p95_latency_ms": 1000, "error_rate": 0.001},
+    "standard": {"p95_latency_ms": 3000, "error_rate": 0.01},
+}
 
 batcher: PriorityBatcher | None = None
 kv_router = default_kv_router()
+_slo_events: dict[str, deque[tuple[float, int, bool]]] = {
+    "premium": deque(),
+    "standard": deque(),
+}
+_slo_last_eval_ts: float = 0.0
+_slo_violation_state: dict[str, bool] = {"premium": False, "standard": False}
 
 
 @asynccontextmanager
@@ -60,6 +79,59 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Wave Gateway", version="0.1.0", lifespan=lifespan)
+
+
+def _tenant_tier(raw_tenant_id: str | None) -> str:
+    if raw_tenant_id == "premium":
+        return "premium"
+    # For now, anything non-premium maps to standard SLO policy.
+    return "standard"
+
+
+def _prune_slo_window(now_ts: float) -> None:
+    for tier in _slo_events:
+        window = _slo_events[tier]
+        while window and (now_ts - window[0][0]) > SLO_WINDOW_SECONDS:
+            window.popleft()
+
+
+def _p95_ms_from_events(window: deque[tuple[float, int, bool]]) -> float:
+    if not window:
+        return 0.0
+    latencies = sorted(event[1] for event in window)
+    idx = max(0, int(0.95 * len(latencies)) - 1)
+    return float(latencies[idx])
+
+
+def _evaluate_slo_violations(now_ts: float) -> None:
+    global _slo_last_eval_ts  # noqa: PLW0603
+    if (now_ts - _slo_last_eval_ts) < SLO_EVAL_INTERVAL_SECONDS:
+        return
+    _slo_last_eval_ts = now_ts
+    _prune_slo_window(now_ts)
+    for tier, target in TIER_SLOS.items():
+        window = _slo_events[tier]
+        if not window:
+            _slo_violation_state[tier] = False
+            continue
+        p95_ms = _p95_ms_from_events(window)
+        errors = sum(1 for _, _, ok in window if not ok)
+        error_rate = errors / len(window)
+        _slo_violation_state[tier] = (
+            p95_ms > target["p95_latency_ms"] or error_rate > target["error_rate"]
+        )
+
+
+def _record_tier_outcome(tenant_tier: str, status_code: int, latency_ms: int) -> None:
+    status = "ok" if 200 <= status_code < 400 else "error"
+    REQUESTS_BY_TIER.labels(tenant_tier=tenant_tier, status=status).inc()
+    REQUEST_LATENCY_MS_BY_TIER.labels(tenant_tier=tenant_tier, status=status).observe(latency_ms)
+    _slo_events[tenant_tier].append((time.time(), latency_ms, status == "ok"))
+
+
+def _should_reject_for_slo(tenant_id: str | None) -> bool:
+    # Reject/deprioritize free traffic first when any SLO tier is currently violated.
+    return (tenant_id or "free") == "free" and any(_slo_violation_state.values())
 
 
 def _validate_request(req: ChatCompletionRequest) -> None:
@@ -87,6 +159,20 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
     path = "/v1/chat/completions"
     start = time.perf_counter()
     status = "200"
+    tenant_tier = _tenant_tier(body.tenant_id)
+    now_ts = time.time()
+    _evaluate_slo_violations(now_ts)
+    if _should_reject_for_slo(body.tenant_id):
+        ADMISSION_REJECTIONS.labels(tenant_tier=tenant_tier, reason="slo_violation").inc()
+        REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
+        REQUEST_COUNT.labels(method="POST", path=path, status="429").inc()
+        ERROR_COUNT.labels(path=path, reason="admission_rejected").inc()
+        _record_tier_outcome(tenant_tier, 429, int((time.perf_counter() - start) * 1000))
+        raise HTTPException(
+            status_code=429,
+            detail="SLO protection active; retry shortly or use higher-priority tier.",
+            headers={"Retry-After": "5"},
+        )
 
     try:
         _validate_request(body)
@@ -94,11 +180,18 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
         REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
         REQUEST_COUNT.labels(method="POST", path=path, status=str(e.status_code)).inc()
         ERROR_COUNT.labels(path=path, reason="validation").inc()
+        _record_tier_outcome(tenant_tier, int(e.status_code), int((time.perf_counter() - start) * 1000))
         raise
 
     # Approximate context length (tokens) for KV pressure proxy.
     approx_tokens = sum(len(m.content) // 4 for m in body.messages)
     tenant_id = body.tenant_id or "free"
+    if batcher is not None:
+        QUEUE_DEPTH.set(float(batcher.queue_depth))
+        INFLIGHT_REQUESTS.set(float(batcher.inflight_requests))
+    else:
+        QUEUE_DEPTH.set(0.0)
+        INFLIGHT_REQUESTS.set(0.0)
 
     # Affinity + KV-aware routing:
     # - Existing conversation_id -> stick to its worker (affinity).
@@ -137,6 +230,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                 REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
                 REQUEST_COUNT.labels(method="POST", path=path, status="503").inc()
                 ERROR_COUNT.labels(path=path, reason="kv_saturated").inc()
+                _record_tier_outcome(tenant_tier, 503, int((time.perf_counter() - start) * 1000))
                 raise HTTPException(
                     status_code=503,
                     detail="KV capacity saturated; please retry later or upgrade tier.",
@@ -146,6 +240,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
             REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
             REQUEST_COUNT.labels(method="POST", path=path, status="503").inc()
             ERROR_COUNT.labels(path=path, reason="kv_saturated").inc()
+            _record_tier_outcome(tenant_tier, 503, int((time.perf_counter() - start) * 1000))
             raise HTTPException(
                 status_code=503,
                 detail="KV capacity saturated (premium); please retry shortly.",
@@ -171,6 +266,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
             if body.stream:
                 REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
                 REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+                _record_tier_outcome(tenant_tier, 200, int((time.perf_counter() - start) * 1000))
                 return StreamingResponse(
                     stream_worker(worker_url, worker_body),
                     media_type="text/event-stream",
@@ -213,6 +309,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                     )
                     REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
                     REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+                    _record_tier_outcome(tenant_tier, 200, int((time.perf_counter() - start) * 1000))
                     return response
 
             # Non-streaming: optionally go through priority-aware batcher.
@@ -271,9 +368,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                 )
             REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
             REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+            _record_tier_outcome(tenant_tier, 200, int((time.perf_counter() - start) * 1000))
             return response
         except Exception:
             ERROR_COUNT.labels(path=path, reason="worker_error").inc()
+            _record_tier_outcome(tenant_tier, 502, int((time.perf_counter() - start) * 1000))
             # Fall through to stub
 
     # No worker configured or worker failed: stub response
@@ -306,6 +405,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
 
     REQUEST_LATENCY.labels(path=path).observe(time.perf_counter() - start)
     REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
+    _record_tier_outcome(tenant_tier, 200, int((time.perf_counter() - start) * 1000))
     return response
 
 
