@@ -1,16 +1,13 @@
-# vLLM worker. On kind / CPU-only hosts this image often fails (CUDA/triton/device inference).
-# For local K8s routing tests use: Dockerfile.worker-mock + scripts/kind-e2e.sh (see k8s/README.md).
-# Build: docker build -f Dockerfile.worker -t llm-worker:latest .
-# Run:   docker run -p 8000:8000 -e MODEL_ID=Qwen/Qwen2-0.5B-Instruct llm-worker:latest
-FROM python:3.12-slim
-
-WORKDIR /app
-
-# Install vLLM (CPU; for GPU use official vllm/vllm image instead)
-RUN pip install --no-cache-dir vllm
-
-ENV MODEL_ID=Qwen/Qwen2-0.5B-Instruct
-ENV PORT=8000
+# Official vLLM CPU OpenAI server image (pre-built on Docker Hub).
+# Docs: https://docs.vllm.ai/en/stable/getting_started/installation/cpu.html#pre-built-images
+#
+# Tags: latest-arm64 (Apple Silicon, ARM kind nodes), latest-x86_64 (Intel/AMD / amd64 kind).
+# Build (default ARM64):
+#   docker build -f Dockerfile.worker -t llm-worker:latest .
+# x86_64 / amd64 kind or Linux:
+#   docker build -f Dockerfile.worker --build-arg VLLM_CPU_TAG=latest-x86_64 -t llm-worker:latest .
+#
+# Runtime args (model, host, port, dtype) are set in k8s/worker-deployment.yaml.
+ARG VLLM_CPU_TAG=latest-arm64
+FROM vllm/vllm-openai-cpu:${VLLM_CPU_TAG}
 EXPOSE 8000
-
-CMD ["sh", "-c", "vllm serve $MODEL_ID --port $PORT --host 0.0.0.0"]

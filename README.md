@@ -6,6 +6,8 @@ Experimentation with a Kubernetes-native LLM inference gateway that sits in fron
 
 See [LLM-Inference-Gateway-TODO.md](./LLM-Inference-Gateway-TODO.md) for the full roadmap.
 
+**Kubernetes / Docker worker:** `Dockerfile.worker` uses the official [**vLLM CPU OpenAI image**](https://docs.vllm.ai/en/stable/getting_started/installation/cpu.html#pre-built-images) (`vllm/vllm-openai-cpu`, `latest-arm64` or `latest-x86_64`). For a fast routing-only smoke test on kind, use `WAVE_WORKER=mock` with [k8s/README.md](./k8s/README.md).
+
 ---
 
 ## What Wave adds on top of vLLM

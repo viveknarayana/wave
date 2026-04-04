@@ -15,40 +15,65 @@ spec:
       labels:
         app: worker
     spec:
+      # vLLM CPU Docker doc: NUMA-related syscalls may need relaxed seccomp in some runtimes.
+      securityContext:
+        seccompProfile:
+          type: Unconfined
       containers:
         - name: vllm
           image: llm-worker:latest
           imagePullPolicy: IfNotPresent
+          # Image ENTRYPOINT is `vllm serve` (official CPU OpenAI image).
+          args:
+            - "Qwen/Qwen2-0.5B-Instruct"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--dtype"
+            - "bfloat16"
           env:
-            - name: MODEL_ID
-              value: "Qwen/Qwen2-0.5B-Instruct"
-            - name: PORT
-              value: "8000"
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "4"
           ports:
             - containerPort: 8000
               name: http
+          securityContext:
+            capabilities:
+              add: ["SYS_NICE"]
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 80
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             requests:
-              memory: "2Gi"
+              memory: "4Gi"
               cpu: "1000m"
             limits:
-              memory: "4Gi"
-              cpu: "2000m"
+              memory: "8Gi"
+              cpu: "4000m"
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
       # For GPU nodes (optional): uncomment and add nodeSelector / tolerations
       # nodeSelector:
       #   nvidia.com/gpu: "true"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: worker
-  namespace: wave
-  labels:
-    app: worker
-spec:
-  selector:
-    app: worker
-  ports:
-    - port: 8000
-      targetPort: 8000
-      name: http

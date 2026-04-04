@@ -1,0 +1,45 @@
+# Fast routing smoke test (no real inference). Use with scripts/kind-e2e.sh WAVE_WORKER=mock.
+# Apply after namespace + redis; replaces the worker Deployment from worker-deployment.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: wave
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: vllm
+          image: llm-worker-mock:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
