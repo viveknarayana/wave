@@ -1,3 +1,4 @@
+# HPA uses resource metrics only (requires metrics-server in the cluster).
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -34,15 +35,6 @@ spec:
           value: 1
           periodSeconds: 60
   metrics:
-    # Queue depth via custom metrics adapter (Prometheus Adapter/KEDA).
-    - type: Pods
-      pods:
-        metric:
-          name: wave_queue_depth
-        target:
-          type: AverageValue
-          averageValue: "20"
-    # CPU fallback keeps autoscaling useful without custom metrics.
     - type: Resource
       resource:
         name: cpu

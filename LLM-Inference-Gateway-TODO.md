@@ -1,5 +1,5 @@
 # LLM Inference Gateway ToDo List
-**"Production-grade Kubernetes-native LLM serving platform with speculative decoding, continuous batching, and SLO-driven scaling"**
+**Kubernetes-oriented LLM gateway in front of vLLM: routing, caching, gateway metrics, SLO-style admission (in-process), CPU HPA manifests.**
 
 ## Phase 1: Core Gateway (Week 1)
 ### [x] Design API spec
@@ -81,7 +81,7 @@ Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"pre
 **Impl:** `gateway/prompt_cache.py` — `get_cached` / `set_cached`; `wave.cache_hit` = `"exact"` | `"semantic"`. Env: `ENABLE_PROMPT_CACHE=1`, `PROMPT_CACHE_TTL`, `SEMANTIC_CACHE_THRESHOLD`, `SEMANTIC_CONTEXT_MESSAGES`, `MAX_SEMANTIC_ENTRIES_PER_CONV`. Semantic is disabled if `sentence-transformers` is not installed.
 
 ## Phase 7: SLO-Driven Autoscaling (Week 5)
-### [ ] SLO definitions
+### [x] SLO definitions (thresholds enforced in gateway code; not cluster-wide SLAs)
 ```yaml
 premium:  { p95_latency: "1s", error_rate: "0.1%" }
 standard: { p95_latency: "3s", error_rate: "1%"   }
@@ -95,13 +95,14 @@ standard: { p95_latency: "3s", error_rate: "1%"   }
 - [x] Add metric `wave_admission_rejections_total{tenant_tier=...,reason=...}`
 - [x] Expose `queue_depth` and `inflight_requests` gauges from gateway
 
-### [x] HPA + custom scaler
-- [x] HPA on queue_depth + p95_latency
+### [x] HPA
+- [x] HPA on CPU utilization (`k8s/*-hpa.yaml`; needs `metrics-server`)
+- [ ] HPA on `queue_depth` / p95 (needs Prometheus Adapter or KEDA + metric rules)
 - [ ] Scale-out: p95 > SLO * 1.2 for 2min
 - [ ] Scale-in: p95 < SLO * 0.8 for 5min
 - [ ] Deploy Prometheus Adapter or KEDA for custom metrics API
 - [x] Add `k8s/gateway-hpa.yaml` (min=2, max=10, with stabilization windows)
-- [x] Add `k8s/worker-hpa.yaml` (min=1, max=8, queue + p95 policy)
+- [x] Add `k8s/worker-hpa.yaml` (min=1, max=8, **CPU-only** metrics; same as gateway)
 - [x] Add cooldown and max-step scale policy to avoid oscillation
 
 **Impl target:**
@@ -139,14 +140,12 @@ tenants:
 - [ ] API docs (Swagger/OpenAPI)
 - [ ] `demo.gif`: load test + Grafana dashboards
 
-### [ ] Resume bullets (ready to copy-paste)
+### [ ] Resume bullets (honest — fill in after you ship the unchecked phases)
 ```text
-- Engineered Kubernetes-native LLM inference gateway with continuous batching, multi-layer prompt caching
-  (exact + semantic, up to 90% cost reduction), and SLO-driven autoscaling across multi-tenant workloads
-- Implemented KV-cache-aware routing preserving conversation locality and paged eviction policies supporting 4x
-  longer contexts without OOM
-- Designed cost-aware admission control enforcing per-tenant budgets and model tier limits, integrated with
-  Temporal for long-running LLM pipelines
+- LLM inference gateway (FastAPI) in front of vLLM: OpenAI-compatible API, streaming, Redis affinity,
+  gateway-level priority batching for non-streaming requests, exact + semantic prompt cache, KV-pressure-style routing
+- In-gateway SLO window + admission (reject free tier on violation); Prometheus /metrics; Kubernetes manifests + CPU HPA
+- (Add after implemented: load-test numbers, budget enforcement, Temporal, speculative decoding, etc.)
 ```
 
 ## Resource Budget
@@ -154,11 +153,11 @@ tenants:
 - **~$20**: 1x A10G on Runpod/Lambda Labs for 10hrs GPU testing
 - **Time**: 6-7 weeks @ 10-15hrs/week
 
-## Success Metrics (target these numbers)
-- ✅ p95 latency: <1s (premium), <3s (standard)
-- ✅ GPU utilization: >80% under load
-- ✅ Speculative speedup: 1.5-2.5x tokens/sec
-- ✅ 100 concurrent users: no SLO violations
+## Success Metrics (targets — not validated in this repo)
+- p95 latency: <1s (premium), <3s (standard)
+- GPU utilization: >80% under load (when running on GPU workers)
+- Speculative decoding speedup: 1.5–2.5× tokens/sec (**not implemented here**)
+- 100 concurrent users: no SLO violations (**not load-tested here**)
 
 ---
 

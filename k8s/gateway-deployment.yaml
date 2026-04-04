@@ -28,6 +28,9 @@ spec:
               value: "redis://redis:6379/0"
             - name: WORKER_BASE_URL
               value: "http://worker:8000"
+            # Avoid lazy-loading embeddings on first request (slow + heavy); enable for cache demos.
+            - name: ENABLE_PROMPT_CACHE
+              value: "0"
           ports:
             - containerPort: 8080
               name: http

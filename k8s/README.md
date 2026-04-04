@@ -1,81 +1,72 @@
-# Wave Kubernetes manifests (Phase 3)
+# Wave Kubernetes manifests
 
-Deploy order: namespace → Redis → worker → gateway (gateway needs Redis and worker).
+Deploy order matters: **namespace first**, then Redis, worker, gateway (gateway expects Redis + worker Service DNS).
 
 ## Prerequisites
 
-- **kubectl** installed
-- **kind** or **k3d** (or any cluster with default StorageClass for Redis volume)
+- `kubectl`, `docker`, **`kind`** (or k3d / any cluster with default StorageClass)
+- For **CPU-only kind nodes**, use the **mock worker** path below. The default `Dockerfile.worker` (`pip install vllm`) often **fails** in slim images without CUDA (device inference errors).
 
-## 1. Create cluster (kind example)
+## One-shot local test (recommended)
 
-```bash
-kind create cluster --name wave
-```
-
-## 2. Build and load images (so the cluster can pull them)
-
-From repo root:
+From repo root **`wave/`** (where `Dockerfile.*` and `k8s/` live):
 
 ```bash
-docker build -f Dockerfile.gateway -t gateway:latest .
-docker build -f Dockerfile.worker -t llm-worker:latest .
-
-kind load docker-image gateway:latest --name wave
-kind load docker-image llm-worker:latest --name wave
+bash scripts/kind-e2e.sh
 ```
 
-(With **k3d**: `k3d image import gateway:latest llm-worker:latest -c k3d-default` or similar.)
-
-## 3. Apply manifests
-
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/redis-statefulset.yaml
-kubectl apply -f k8s/worker-deployment.yaml
-kubectl apply -f k8s/gateway-deployment.yaml
-```
-
-Or all at once:
-
-```bash
-kubectl apply -f k8s/
-```
-
-## 4. Wait for pods
-
-```bash
-kubectl -n wave get pods -w
-```
-
-Wait until `gateway`, `worker`, and `redis-0` are Running.
-
-## 5. Test
-
-Gateway is exposed as **NodePort 30080**. With kind, port-forward or use the node IP:
-
-```bash
-# Port-forward (works from any cluster)
-kubectl -n wave port-forward svc/gateway 8080:8080
-```
+This builds **`gateway:latest`** + **`llm-worker-mock:latest`**, loads them into kind, applies manifests in order, and points the worker Deployment at the mock image.
 
 Then:
 
 ```bash
-curl -s http://localhost:8080/health
-curl -s -X POST http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"premium","messages":[{"role":"user","content":"Hi"}]}' | python3 -m json.tool
+kubectl --context kind-wave -n wave port-forward svc/gateway 8080:8080
 ```
-
-If using NodePort directly (e.g. kind node is localhost):
 
 ```bash
-curl -s http://localhost:30080/health
+curl -s http://localhost:8080/health
+curl -s http://localhost:8080/worker/health
+curl -s -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"premium","conversation_id":"k8s-test-1","messages":[{"role":"user","content":"Hi"}]}'
 ```
 
-## Notes
+Check Redis affinity after the first request:
 
-- **Redis**: StatefulSet with 1Gi volume. Needs default StorageClass (kind provides one).
-- **Worker**: 1 replica, CPU-only by default. For GPU, set nodeSelector/tolerations and use a GPU image.
-- **Gateway**: 3 replicas, talks to `redis:6379` and `http://worker:8000` inside the cluster.
+```bash
+kubectl -n wave exec sts/redis -- redis-cli GET conv:k8s-test-1
+# expect: worker-1
+```
+
+## Manual kind steps
+
+```bash
+kind create cluster --name wave
+docker build -f Dockerfile.gateway -t gateway:latest .
+docker build -f Dockerfile.worker-mock -t llm-worker-mock:latest .
+kind load docker-image gateway:latest --name wave
+kind load docker-image llm-worker-mock:latest --name wave
+kubectl config use-context kind-wave
+
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/redis-statefulset.yaml
+kubectl apply -f k8s/worker-deployment.yaml
+kubectl apply -f k8s/gateway-deployment.yaml
+kubectl -n wave set image deployment/worker vllm=llm-worker-mock:latest
+kubectl -n wave rollout status deployment/worker --timeout=180s
+kubectl -n wave rollout status deployment/gateway --timeout=180s
+```
+
+**Do not rely on** `kubectl apply -f k8s/` alone: alphabetical order can apply `gateway` before `namespace` exists.
+
+## HPAs
+
+`gateway-hpa.yaml` / `worker-hpa.yaml` target **CPU**. Install **metrics-server** or HPAs will log errors (harmless for routing tests).
+
+## Gateway env notes
+
+- **`ENABLE_PROMPT_CACHE=0`** is set in `gateway-deployment.yaml` so the first request does not lazy-load embedding models (slow / memory-heavy in small limits). Set to `1` when you want cache demos and enough memory.
+
+## Real vLLM worker
+
+Use a **GPU** node and an image that matches vLLM’s install docs, or build from upstream **CPU** Docker instructions. Keep `llm-worker:latest` in `worker-deployment.yaml` when your image works.
