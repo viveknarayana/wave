@@ -77,6 +77,33 @@ docker build -f Dockerfile.worker --build-arg VLLM_CPU_TAG=latest-x86_64 -t llm-
 
 `gateway-deployment.yaml` sets **`ENABLE_PROMPT_CACHE=0`** so pods do not lazy-load embedding models on first request (heavy for small limits). Set to `1` when you want cache demos and enough memory.
 
+### Multi-worker (local Docker + gateway on host)
+
+Do **not** set `WORKER_BASE_URL` when you want more than one backend; use numbered URLs so the gateway can route by `worker-1`, `worker-2`, … and Redis affinity (`conv:<conversation_id>`):
+
+```bash
+export REDIS_URL=redis://127.0.0.1:6379/0
+export WORKER_1_URL=http://127.0.0.1:8000
+export WORKER_2_URL=http://127.0.0.1:8001
+export ENABLE_PROMPT_CACHE=0
+# from wave/ (repo root of Dockerfiles)
+uvicorn gateway.main:app --port 8080
+```
+
+**Recommended on a laptop:** one real vLLM on **:8000** plus the mock on **:8001** — same `WORKER_*_URL` env as above; start the mock with:
+
+```bash
+docker compose -f docker-compose.vllm-and-mock.yaml up -d --build
+```
+
+(Run vLLM however you already do; omit the compose file’s `vllm` profile so you do not start a second vLLM.) Optional **two full vLLM** CPUs: `docker-compose.two-vllm.yaml` (heavy).
+
+```bash
+curl -s http://localhost:8080/worker/health
+```
+
+New conversations pick the least-loaded worker (KV pressure proxy); repeating the same `conversation_id` sticks to the worker stored in Redis. Replies that contain **`[mock-worker]`** came from the mock; real model text comes from vLLM.
+
 ## HPAs
 
 `gateway-hpa.yaml` / `worker-hpa.yaml` use **CPU** targets. Install **metrics-server** or ignore HPA warning events for local tests.

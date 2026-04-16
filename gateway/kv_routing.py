@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from gateway.worker_client import list_worker_targets
+
 
 @dataclass
 class WorkerKVStats:
@@ -143,18 +145,10 @@ def default_kv_router() -> KVAwareRouter:
     Build a router from env/worker ids.
 
     - If WORKER_BASE_URL is set, assume single worker "worker-1".
-    - Else, try WORKER_1_URL, WORKER_2_URL, ... (mirrors worker_client).
+    - Else, WORKER_1_URL, WORKER_2_URL, ... (sorted worker-1, worker-2, ...).
     """
-    worker_ids: List[str] = []
-    if os.environ.get("WORKER_BASE_URL"):
-        worker_ids = ["worker-1"]
-    else:
-        for k in os.environ:
-            if k.startswith("WORKER_") and k.endswith("_URL") and k != "WORKER_BASE_URL":
-                wid = k.replace("WORKER_", "").replace("_URL", "").lower()
-                wid = f"worker-{wid}" if wid.isdigit() else wid
-                worker_ids.append(wid)
-        if not worker_ids:
-            worker_ids = ["worker-1"]
-    return KVAwareRouter(worker_ids)
+    targets = list_worker_targets()
+    if targets:
+        return KVAwareRouter([wid for wid, _ in targets])
+    return KVAwareRouter([os.environ.get("DEFAULT_WORKER_ID", "worker-1")])
 

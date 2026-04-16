@@ -20,6 +20,27 @@ for k, v in os.environ.items():
         WORKER_URL_MAP[worker_id] = v.rstrip("/")
 
 
+def list_worker_targets() -> list[tuple[str, str]]:
+    """
+    Ordered (worker_id, base_url) for all configured backends.
+    Single WORKER_BASE_URL -> one entry (worker-1). Multi: WORKER_1_URL, WORKER_2_URL, ...
+    """
+    if WORKER_BASE_URL:
+        return [("worker-1", WORKER_BASE_URL.rstrip("/"))]
+    items: list[tuple[str, str]] = [
+        (wid, url) for wid, url in WORKER_URL_MAP.items()
+    ]
+
+    def _sort_key(pair: tuple[str, str]) -> tuple[int, int | str]:
+        wid, _ = pair
+        if wid.startswith("worker-") and wid[7:].isdigit():
+            return (0, int(wid[7:]))
+        return (1, wid)
+
+    items.sort(key=_sort_key)
+    return items
+
+
 def get_worker_url(worker_id: str) -> Optional[str]:
     """Resolve worker_id to base URL. Returns None if no worker configured."""
     if WORKER_BASE_URL:

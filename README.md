@@ -2,7 +2,7 @@
 
 ![Wave](wave.png)
 
-Experimentation with a Kubernetes-native LLM inference gateway that sits in front of vLLM and adds production features (routing, caching, tenancy, metrics).
+Wave is a gateway in front of vLLM that adds routing, caching, tenant controls, and metrics for LLM apps.
 
 See [LLM-Inference-Gateway-TODO.md](./LLM-Inference-Gateway-TODO.md) for the full roadmap.
 

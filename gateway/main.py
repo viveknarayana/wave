@@ -15,6 +15,8 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from gateway.config import get_tenant_config
 from gateway.metrics import (
     ADMISSION_REJECTIONS,
+    CACHE_HITS,
+    CACHE_MISSES,
     INFLIGHT_REQUESTS,
     REQUEST_COUNT,
     REQUEST_LATENCY,
@@ -38,7 +40,13 @@ from gateway.session_store import (
     set_worker_for_conversation,
     clear_worker_for_conversation,
 )
-from gateway.worker_client import get_worker_url, call_worker, stream_worker, get_worker_health
+from gateway.worker_client import (
+    get_worker_url,
+    call_worker,
+    stream_worker,
+    get_worker_health,
+    list_worker_targets,
+)
 from gateway.batching import PriorityBatcher, BatchRequest
 from gateway.kv_routing import default_kv_router
 from gateway.prompt_cache import get_cached, set_cached
@@ -277,6 +285,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                 messages_for_cache = [{"role": m.role, "content": m.content} for m in body.messages]
                 cached, cache_hit_type = get_cached(body.conversation_id, body.model, messages_for_cache)
                 if cached is not None and cache_hit_type:
+                    CACHE_HITS.labels(type=cache_hit_type).inc()
                     choices = cached.get("choices", [])
                     usage_raw = cached.get("usage") or {}
                     msg = choices[0].get("message", {}) if choices else {}
@@ -311,6 +320,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
                     REQUEST_COUNT.labels(method="POST", path=path, status=status).inc()
                     _record_tier_outcome(tenant_tier, 200, int((time.perf_counter() - start) * 1000))
                     return response
+                CACHE_MISSES.inc()
 
             # Non-streaming: optionally go through priority-aware batcher.
             if ENABLE_PRIORITY_BATCHING and batcher is not None:
@@ -425,15 +435,32 @@ async def health() -> dict:
 
 @app.get("/worker/health")
 async def worker_health() -> dict:
-    """Probe configured worker's /health. Returns worker status or 503 if no worker/unhealthy."""
-    worker_url = get_worker_url(DEFAULT_WORKER_ID)
-    if not worker_url:
-        return {"status": "no_worker", "worker": None}
-    try:
-        data = await get_worker_health(worker_url)
-        return {"status": "ok", **data}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Worker unreachable: {e!s}")
+    """Probe each configured worker's /health (single WORKER_BASE_URL or WORKER_1_URL, ...)."""
+    targets = list_worker_targets()
+    if not targets:
+        return {"status": "no_worker", "workers": []}
+    workers: list[dict] = []
+    any_ok = False
+    for wid, base in targets:
+        try:
+            data = await get_worker_health(base)
+            any_ok = True
+            workers.append({"worker_id": wid, "status": "ok", **data})
+        except Exception as e:  # noqa: BLE001
+            workers.append(
+                {
+                    "worker_id": wid,
+                    "status": "error",
+                    "worker": base,
+                    "detail": str(e),
+                }
+            )
+    if not any_ok:
+        raise HTTPException(status_code=503, detail={"workers": workers})
+    return {
+        "status": "ok" if all(w.get("status") == "ok" for w in workers) else "degraded",
+        "workers": workers,
+    }
 
 
 @app.exception_handler(Exception)

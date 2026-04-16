@@ -6,8 +6,13 @@ from __future__ import annotations
 TENANTS: dict[str, dict] = {
     "free": {
         "max_context": 2_000,
-        "models": ["tiny", "phi-3-mini"],
+        "models": ["tiny", "phi-3-mini", "Qwen/Qwen2-0.5B-Instruct"],
         "rate_limit_per_min": 10,
+    },
+    "acme": {
+        "max_context": 8_192,
+        "models": ["Qwen/Qwen2-0.5B-Instruct"],
+        "rate_limit_per_min": 100,
     },
     "premium": {
         "max_context": 32_000,

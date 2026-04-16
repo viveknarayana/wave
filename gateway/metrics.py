@@ -45,6 +45,16 @@ INFLIGHT_REQUESTS = Gauge(
     "Current in-flight requests in the gateway",
 )
 
+CACHE_HITS = Counter(
+    "wave_prompt_cache_hits_total",
+    "Total prompt cache hits by type",
+    ["type"],
+)
+CACHE_MISSES = Counter(
+    "wave_prompt_cache_misses_total",
+    "Total prompt cache misses",
+)
+
 
 def get_metrics_content_type() -> str:
     return CONTENT_TYPE_LATEST
