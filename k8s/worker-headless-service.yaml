@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-headless
+  namespace: wave
+  labels:
+    app: worker
+spec:
+  # Headless service gives stable DNS per StatefulSet pod:
+  # worker-0.worker-headless.wave.svc.cluster.local, etc.
+  clusterIP: None
+  selector:
+    app: worker
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http

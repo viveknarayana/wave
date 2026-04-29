@@ -40,9 +40,9 @@ Test: `curl -X POST ... -d '{"model":"Qwen/Qwen2-0.5B-Instruct","tenant_id":"pre
 ### [x] K8s manifests
 - [x] `k8s/namespace.yaml`
 - [x] `k8s/gateway-deployment.yaml` (3 replicas) + Service (NodePort 30080)
-- [x] `k8s/worker-deployment.yaml` (1 replica; vLLM CPU via `vllm/vllm-openai-cpu`; optional GPU nodeSelector in comments)
-- [x] `k8s/worker-service.yaml` (ClusterIP `worker:8000`)
-- [x] `k8s/worker-deployment-mock.yaml` (optional stub for fast kind tests)
+- [x] `k8s/worker-statefulset.yaml` (1 replica; vLLM CPU via `vllm/vllm-openai-cpu`; optional GPU nodeSelector in comments)
+- [x] `k8s/worker-headless-service.yaml` (headless service for stable pod DNS)
+- [x] `k8s/worker-statefulset-mock.yaml` (optional stub for fast kind tests)
 - [x] `k8s/redis-statefulset.yaml` + headless Service
 - [x] `k8s/README.md` — apply order, build/load images, test commands
 

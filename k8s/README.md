@@ -1,6 +1,6 @@
 # Wave Kubernetes manifests
 
-Apply **namespace first**, then the rest (gateway expects Redis + `worker` Service DNS).
+Apply **namespace first**, then the rest (gateway expects Redis + worker endpoints).
 
 ## Worker image options
 
@@ -11,11 +11,11 @@ Matches [vLLM CPU install — pre-built images](https://docs.vllm.ai/en/stable/g
 - **linux/arm64** (M1/M2 Mac, ARM kind nodes): `vllm/vllm-openai-cpu:latest-arm64`
 - **linux/amd64**: `vllm/vllm-openai-cpu:latest-x86_64`
 
-This repo’s **`Dockerfile.worker`** is a thin `FROM` of that image (pick tag via `VLLM_CPU_TAG`). **`k8s/worker-deployment.yaml`** passes `vllm serve` args (model, `--host`, `--port`, `--dtype bfloat16`), **`/dev/shm`**, `SYS_NICE`, relaxed seccomp per the same doc, and long **startup** probes (first model download can take many minutes).
+This repo’s **`Dockerfile.worker`** is a thin `FROM` of that image (pick tag via `VLLM_CPU_TAG`). **`k8s/worker-statefulset.yaml`** passes `vllm serve` args (model, `--host`, `--port`, `--dtype bfloat16`), **`/dev/shm`**, `SYS_NICE`, relaxed seccomp per the same doc, and long **startup** probes (first model download can take many minutes).
 
 ### B) Mock worker (routing only, seconds)
 
-`Dockerfile.worker-mock` + **`k8s/worker-deployment-mock.yaml`** — no vLLM, no weights.
+`Dockerfile.worker-mock` + **`k8s/worker-statefulset-mock.yaml`** — no vLLM, no weights.
 
 ## One-shot local test (kind)
 
@@ -36,8 +36,8 @@ The script picks **arm64 vs x86_64** tag from `uname -m`, builds `gateway:latest
 ```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/redis-statefulset.yaml
-kubectl apply -f k8s/worker-service.yaml
-kubectl apply -f k8s/worker-deployment.yaml   # or worker-deployment-mock.yaml
+kubectl apply -f k8s/worker-headless-service.yaml
+kubectl apply -f k8s/worker-statefulset.yaml   # or worker-statefulset-mock.yaml
 kubectl apply -f k8s/gateway-deployment.yaml
 ```
 
@@ -110,4 +110,4 @@ New conversations pick the least-loaded worker (KV pressure proxy); repeating th
 
 ## GPU vLLM
 
-Use an official CUDA/GPU vLLM image and adjust `worker-deployment.yaml` (resources, nodeSelector, image); this folder is oriented around **CPU** kind setups.
+Use an official CUDA/GPU vLLM image and adjust `worker-statefulset.yaml` (resources, nodeSelector, image); this folder is oriented around **CPU** kind setups.

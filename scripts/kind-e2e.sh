@@ -36,18 +36,19 @@ kubectl config use-context "${CTX}"
 
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/redis-statefulset.yaml
-kubectl apply -f k8s/worker-service.yaml
+kubectl -n wave delete deployment/worker 2>/dev/null || true
+kubectl apply -f k8s/worker-headless-service.yaml
 if [[ "$WAVE_WORKER" == "mock" ]]; then
-  kubectl apply -f k8s/worker-deployment-mock.yaml
+  kubectl apply -f k8s/worker-statefulset-mock.yaml
 else
-  kubectl apply -f k8s/worker-deployment.yaml
+  kubectl apply -f k8s/worker-statefulset.yaml
 fi
 kubectl apply -f k8s/gateway-deployment.yaml
 kubectl apply -f k8s/gateway-hpa.yaml 2>/dev/null || true
 kubectl apply -f k8s/worker-hpa.yaml 2>/dev/null || true
 
 echo "Waiting for worker (vLLM CPU first boot can take many minutes to download weights)..."
-kubectl -n wave rollout status deployment/worker --timeout=1200s
+kubectl -n wave rollout status statefulset/worker --timeout=1200s
 kubectl -n wave rollout status deployment/gateway --timeout=180s
 
 echo ""

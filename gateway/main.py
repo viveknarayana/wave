@@ -4,6 +4,7 @@ Redis session store (conversation_id -> worker_id), and Prometheus metrics.
 """
 
 import os
+import asyncio
 import time
 import uuid
 from collections import deque
@@ -57,6 +58,11 @@ ENABLE_PRIORITY_BATCHING = os.environ.get("ENABLE_PRIORITY_BATCHING", "1") == "1
 SLO_WINDOW_SECONDS = int(os.environ.get("SLO_WINDOW_SECONDS", "120"))
 SLO_EVAL_INTERVAL_SECONDS = int(os.environ.get("SLO_EVAL_INTERVAL_SECONDS", "15"))
 
+# Background worker health refresh (used to avoid routing to endpoints that
+# aren't ready yet when autoscaling changes the replica count).
+WORKER_HEALTH_REFRESH_SECONDS = float(os.environ.get("WORKER_HEALTH_REFRESH_SECONDS", "10"))
+WORKER_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("WORKER_HEALTH_TIMEOUT_SECONDS", "2"))
+
 TIER_SLOS = {
     "premium": {"p95_latency_ms": 1000, "error_rate": 0.001},
     "standard": {"p95_latency_ms": 3000, "error_rate": 0.01},
@@ -75,15 +81,40 @@ _slo_violation_state: dict[str, bool] = {"premium": False, "standard": False}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global batcher  # noqa: PLW0603
+    worker_health_task: asyncio.Task | None = None
 
     if ENABLE_PRIORITY_BATCHING:
         batcher = PriorityBatcher(call_worker)
         await batcher.start()
     try:
+        # Mark worker endpoints healthy/unhealthy so routing doesn't pick
+        # backends that haven't come up yet.
+        targets = list_worker_targets()
+        if targets:
+            async def _refresh_worker_health_loop() -> None:
+                while True:
+                    try:
+                        for wid, base_url in list_worker_targets():
+                            try:
+                                await get_worker_health(base_url, timeout=WORKER_HEALTH_TIMEOUT_SECONDS)
+                                kv_router.set_worker_health(wid, True)
+                            except Exception:  # noqa: BLE001
+                                kv_router.set_worker_health(wid, False)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await asyncio.sleep(WORKER_HEALTH_REFRESH_SECONDS)
+
+            worker_health_task = asyncio.create_task(_refresh_worker_health_loop(), name="wave-worker-health-refresh")
         yield
     finally:
         if batcher is not None:
             await batcher.stop()
+        if worker_health_task is not None:
+            worker_health_task.cancel()
+            try:
+                await worker_health_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Wave Gateway", version="0.1.0", lifespan=lifespan)
@@ -216,14 +247,22 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Cha
         # No conversation_id: treat this as a short one-off; use KV router anyway.
         worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
 
-    # If this conversation is pinned to a saturated worker, unpin + reroute (cold start).
-    if body.conversation_id and not is_new_conversation and worker_id and kv_router.is_saturated(worker_id):
-        if tenant_id != "premium":
+    # If this conversation is pinned to a problematic worker (unhealthy or KV-saturated),
+    # unpin + reroute (cold start).
+    if body.conversation_id and not is_new_conversation and worker_id:
+        if not kv_router.is_worker_healthy(worker_id):
             kv_router.evict_specific_conversation(worker_id, body.conversation_id)
             clear_worker_for_conversation(body.conversation_id)
             worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
             set_worker_for_conversation(body.conversation_id, worker_id)
             is_new_conversation = True
+        elif kv_router.is_saturated(worker_id):
+            if tenant_id != "premium":
+                kv_router.evict_specific_conversation(worker_id, body.conversation_id)
+                clear_worker_for_conversation(body.conversation_id)
+                worker_id = kv_router.choose_worker_for_new_conversation(approx_tokens)
+                set_worker_for_conversation(body.conversation_id, worker_id)
+                is_new_conversation = True
 
     # KV admission control: if all workers are saturated, shed load.
     if kv_router.all_saturated():

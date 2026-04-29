@@ -7,7 +7,7 @@
 # x86_64 / amd64 kind or Linux:
 #   docker build -f Dockerfile.worker --build-arg VLLM_CPU_TAG=latest-x86_64 -t llm-worker:latest .
 #
-# Runtime args (model, host, port, dtype) are set in k8s/worker-deployment.yaml.
+# Runtime args (model, host, port, dtype) are set in k8s/worker-statefulset.yaml.
 ARG VLLM_CPU_TAG=latest-arm64
 FROM vllm/vllm-openai-cpu:${VLLM_CPU_TAG}
 EXPOSE 8000

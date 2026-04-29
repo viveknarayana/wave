@@ -1,0 +1,60 @@
+# Two CPU vLLM backends for local multi-worker gateway tests (Redis separate).
+#
+# Pick image tag to match your machine (see k8s/README.md):
+#   arm64: VLLM_CPU_TAG=latest-arm64
+#   amd64: VLLM_CPU_TAG=latest-x86_64
+#
+#   docker compose -f docker-compose.two-vllm.yaml up -d
+#
+# Stop anything already bound to 8000/8001 first. Use host Redis, e.g.:
+#   REDIS_URL=redis://127.0.0.1:6379/0
+#   WORKER_1_URL=http://127.0.0.1:8000
+#   WORKER_2_URL=http://127.0.0.1:8001
+#   ENABLE_PROMPT_CACHE=0 uvicorn gateway.main:app --port 8080
+
+services:
+  vllm-1:
+    image: vllm/vllm-openai-cpu:${VLLM_CPU_TAG:-latest-arm64}
+    container_name: wave-vllm-cpu-1
+    ports:
+      - "8000:8000"
+    shm_size: "4g"
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_NICE
+    environment:
+      VLLM_CPU_OMP_THREADS_BIND: nobind
+      OMP_NUM_THREADS: "4"
+      VLLM_CPU_KVCACHE_SPACE: "4"
+    command:
+      - Qwen/Qwen2-0.5B-Instruct
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --dtype
+      - bfloat16
+
+  vllm-2:
+    image: vllm/vllm-openai-cpu:${VLLM_CPU_TAG:-latest-arm64}
+    container_name: wave-vllm-cpu-2
+    ports:
+      - "8001:8000"
+    shm_size: "4g"
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_NICE
+    environment:
+      VLLM_CPU_OMP_THREADS_BIND: nobind
+      OMP_NUM_THREADS: "4"
+      VLLM_CPU_KVCACHE_SPACE: "4"
+    command:
+      - Qwen/Qwen2-0.5B-Instruct
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --dtype
+      - bfloat16

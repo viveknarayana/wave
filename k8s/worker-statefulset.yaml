@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: worker
+  namespace: wave
+  labels:
+    app: worker
+spec:
+  serviceName: worker-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # vLLM CPU Docker doc: NUMA-related syscalls may need relaxed seccomp in some runtimes.
+      securityContext:
+        seccompProfile:
+          type: Unconfined
+      containers:
+        - name: vllm
+          image: llm-worker:latest
+          imagePullPolicy: IfNotPresent
+          # Image ENTRYPOINT is `vllm serve` (official CPU OpenAI image).
+          args:
+            - "Qwen/Qwen2-0.5B-Instruct"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--dtype"
+            - "bfloat16"
+            # Reuse attention KV for repeated prompt prefixes across different requests.
+            # This can reduce prefill cost when requests share conversation history prefixes.
+            - "--enable-prefix-caching"
+          env:
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "4"
+          ports:
+            - containerPort: 8000
+              name: http
+          securityContext:
+            capabilities:
+              add: ["SYS_NICE"]
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 80
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+      # For GPU nodes (optional): uncomment and add nodeSelector / tolerations
+      # nodeSelector:
+      #   nvidia.com/gpu: "true"

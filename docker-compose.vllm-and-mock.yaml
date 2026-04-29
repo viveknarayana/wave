@@ -1,0 +1,53 @@
+# One real vLLM (optional) + OpenAI-shaped mock worker for multi-backend tests without 2× CPU vLLM.
+#
+# Mock only (vLLM you run separately, e.g. existing container on :8000):
+#   docker compose -f docker-compose.vllm-and-mock.yaml up -d --build
+#
+# Both (heavy — needs RAM like two vLLMs minus one full model load on mock):
+#   export VLLM_CPU_TAG=latest-arm64   # or latest-x86_64
+#   docker compose -f docker-compose.vllm-and-mock.yaml --profile vllm up -d --build
+#
+# Gateway on host (never set WORKER_BASE_URL):
+#   export REDIS_URL=redis://127.0.0.1:6379/0
+#   export WORKER_1_URL=http://127.0.0.1:8000
+#   export WORKER_2_URL=http://127.0.0.1:8001
+#   export ENABLE_PROMPT_CACHE=0
+#   uvicorn gateway.main:app --port 8080
+#
+# New conversations go to the lower KV-pressure worker (mock is cheap); same conversation_id
+# stays pinned via Redis. Hit mock: use a second conversation after the first pinned vLLM, or
+# flush Redis and watch which worker /worker/health labels as used.
+
+services:
+  mock-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker-mock
+    image: llm-worker-mock:latest
+    container_name: wave-mock-worker
+    ports:
+      - "8001:8000"
+
+  vllm-cpu:
+    profiles: ["vllm"]
+    image: vllm/vllm-openai-cpu:${VLLM_CPU_TAG:-latest-arm64}
+    container_name: wave-vllm-cpu-compose
+    ports:
+      - "8000:8000"
+    shm_size: "4g"
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_NICE
+    environment:
+      VLLM_CPU_OMP_THREADS_BIND: nobind
+      OMP_NUM_THREADS: "4"
+      VLLM_CPU_KVCACHE_SPACE: "4"
+    command:
+      - Qwen/Qwen2-0.5B-Instruct
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --dtype
+      - bfloat16

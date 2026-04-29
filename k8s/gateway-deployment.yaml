@@ -26,8 +26,24 @@ spec:
           env:
             - name: REDIS_URL
               value: "redis://redis:6379/0"
-            - name: WORKER_BASE_URL
-              value: "http://worker:8000"
+            # Pin conversation_ids to specific vLLM instances via stable StatefulSet pod DNS.
+            # worker_client maps WORKER_1_URL -> worker-1, WORKER_2_URL -> worker-2, etc.
+            - name: WORKER_1_URL
+              value: "http://worker-0.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_2_URL
+              value: "http://worker-1.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_3_URL
+              value: "http://worker-2.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_4_URL
+              value: "http://worker-3.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_5_URL
+              value: "http://worker-4.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_6_URL
+              value: "http://worker-5.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_7_URL
+              value: "http://worker-6.worker-headless.wave.svc.cluster.local:8000"
+            - name: WORKER_8_URL
+              value: "http://worker-7.worker-headless.wave.svc.cluster.local:8000"
             # Avoid lazy-loading embeddings on first request (slow + heavy); enable for cache demos.
             - name: ENABLE_PROMPT_CACHE
               value: "0"

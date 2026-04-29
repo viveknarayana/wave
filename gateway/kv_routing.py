@@ -41,6 +41,8 @@ class KVAwareRouter:
         saturation_threshold: float = 0.8,
     ) -> None:
         self._stats: Dict[str, WorkerKVStats] = {wid: WorkerKVStats(kv_capacity=max_pressure_budget) for wid in worker_ids}
+        # If a worker endpoint is unhealthy (pod not ready / down), avoid routing to it.
+        self._healthy: Dict[str, bool] = {wid: True for wid in worker_ids}
         self._max_pressure_budget = max_pressure_budget
         self._saturation_threshold = saturation_threshold
         # Track a rough set of conversation_ids per worker for potential eviction.
@@ -62,6 +64,7 @@ class KVAwareRouter:
         if worker_id not in self._stats:
             self._stats[worker_id] = WorkerKVStats(kv_capacity=self._max_pressure_budget)
             self._worker_conversations[worker_id] = []
+            self._healthy[worker_id] = True
         s = self._stats[worker_id]
         if is_new:
             s.active_conversations += 1
@@ -81,9 +84,26 @@ class KVAwareRouter:
             # Fallback: single default worker id
             return os.environ.get("DEFAULT_WORKER_ID", "worker-1")
 
-        # Sort by pressure ascending
+        # Prefer healthy workers when picking a backend.
+        healthy_items = [(wid, st) for wid, st in self._stats.items() if self._healthy.get(wid, True)]
+        if healthy_items:
+            best_id, _ = min(healthy_items, key=lambda item: item[1].pressure)
+            return best_id
+
+        # Fallback: if none are marked healthy, still pick the least pressured one.
         best_id, _ = min(self._stats.items(), key=lambda item: item[1].pressure)
         return best_id
+
+    def set_worker_health(self, worker_id: str, healthy: bool) -> None:
+        """Mark a worker endpoint healthy/unhealthy for admission-time routing."""
+        if not worker_id:
+            return
+        self._healthy[worker_id] = healthy
+
+    def set_workers_health(self, health: Dict[str, bool]) -> None:
+        """Bulk update worker health statuses."""
+        for wid, ok in health.items():
+            self.set_worker_health(wid, ok)
 
     # --- Saturation + eviction helpers ---
 
@@ -93,6 +113,12 @@ class KVAwareRouter:
         if not stats:
             return False
         return stats.pressure >= stats.kv_capacity * self._saturation_threshold
+
+    def is_worker_healthy(self, worker_id: str) -> bool:
+        """Whether the worker endpoint is currently considered reachable."""
+        if not worker_id:
+            return False
+        return self._healthy.get(worker_id, True)
 
     def all_saturated(self) -> bool:
         """Return True if all known workers are saturated."""
